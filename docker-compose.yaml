@@ -1,0 +1,14 @@
+version: "2"
+
+services:
+  azure-cognitive-search-organizer:
+    build: .
+    container_name: "azure-cognitive-search-organizer"
+    platform: linux/amd64
+    tty: true
+    volumes:
+      - ./src:/mnt/app/src
+      - ./data:/mnt/app/data
+      - ./results:/mnt/app/results
+    env_file:
+      - .env
