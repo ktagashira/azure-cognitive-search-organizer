@@ -40,10 +40,3 @@ def extract_html_text(url):
     texts = soup.get_text(strip=True)
 
     return title, texts
-
-
-def split_by_token(text, block_size):
-    all_text_length = len(encoding.encode(text))
-    if all_text_length < block_size:
-        return text
-    return "".join(encoding.decode(encoding.encode(text)[:block_size]))
