@@ -11,17 +11,17 @@ from helper import extract_html_text
 openai.api_key = os.environ["AZURE_OPEN_AI_API_KEY"]
 openai.api_base = os.environ["AZURE_OPEN_AI_BASE"]
 openai.api_type = "azure"
-openai.api_version = "2023-06-01-preview"
+openai.api_version = "2023-07-01-preview"
 deployment_name = os.environ["AZURE_OPEN_AI_DEPLOYMENT"]
 
-encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+encoding = tiktoken.encoding_for_model("gpt-3.5-turbo-16k")
 
 context_output_style = {
-    "context": "テキスト",
+    "context": "[Japanese Summarized Text up to 1000 characters]",
 }
 context_output_style = json.dumps(context_output_style, ensure_ascii=False)  # type: ignore
 
-title_category_system_style = {"title": "タイトル", "category": "カテゴリー"}
+title_category_system_style = {"title": "[タイトル]", "category": "[カテゴリー]"}
 title_category_system_style = json.dumps(
     title_category_system_style, ensure_ascii=False
 )  # type: ignore
@@ -33,41 +33,49 @@ userの入力はwebサイトからテキストを抽出してきたものです�
 {title_category_system_style}
 """
 
-max_retries = 5
-max_input_size = 7000
+SLEEP_TIME = 10
+MAX_RETRIES = 5
+MAX_INPUT_SIZE = 8000
+MAX_CONTEXT_LENGTH = 1000
+
+RESULT_COLS = ["Index", "URL", "Title", "Category", "Context"]
 
 
 def main():
-    df = pd.read_csv(os.path.join("data", os.environ["URL_FILE_NAME"]))
-    result_cols = ["Index", "URL", "Title", "Category", "Context"]
-    results = pd.DataFrame(columns=result_cols)
+    df = pd.read_csv(os.environ["URL_FILE_PATH"])
     client_name = os.environ["CLIENT_NAME"]
+
     for idx, row in tqdm(df.iterrows(), total=len(df)):
         index = client_name + "_" + str(idx)
+        print("Index: ", index)
         retry_count = 0
-        while retry_count < max_retries:
+        while retry_count < MAX_RETRIES:
             try:
-                time.sleep(5)
+                time.sleep(SLEEP_TIME)
                 url = row[os.environ["URL_COLUMNS"]]
+                print("URL: ", url)
                 title, html_text = extract_html_text(url)
-                print("文字サイズ: ", len(html_text))
-                print("トークン数: ", encoding.encode(html_text))
-                if len(html_text) > max_input_size:
+                print("タイトル: ", title)
+                if len(html_text) > MAX_INPUT_SIZE:
                     html_text = "".join(
-                        encoding.decode(encoding.encode(html_text)[:max_input_size])
+                        encoding.decode(encoding.encode(html_text)[:MAX_INPUT_SIZE])
                     )
+                print("トークン数: ", len(encoding.encode(html_text)))
 
                 context_system_prompt = f"""
-                userの入力は、webサイトのbodyのテキストを抽出してきたものです。
-                このテキストを、以下のタイトルに沿ったAzure Cognitive Searchのcontextとして利用できる綺麗な文章に整理してください。
-                # タイトル
-                { title }
-                # 制約条件
-                - 500文字以内に収めること。
-                - 情報が多いのは良いことなので、情報を削除しすぎないこと。
-                # output形式(in JSON)
-                {context_output_style}
+                User input is text extracted from the website.              
+                Summarize the text into five clean Japanese sentences of no more than {MAX_CONTEXT_LENGTH} tokens according to the Title.
+                # Title
+                {title}
+                
+                # Rules
+                1. The text must be organized into five clean Japanese sentences.
+                2. The text must be no more than 1000 tokens.
+
+                # Output Format(in JSON)
+                { context_output_style }
                 """
+
                 context_completion = openai.ChatCompletion.create(
                     engine=deployment_name,
                     temperature=0.4,
@@ -76,20 +84,33 @@ def main():
                         {"role": "user", "content": html_text},
                         {"role": "assistant", "content": "{"},
                     ],
+                    timeout=60,
                 )
-                context_response = json.loads(
-                    "{" + context_completion.choices[0]["message"]["content"]
+                res = (
+                    context_completion.choices[0]["message"]["content"]
+                    .replace("\n", "")
+                    .replace(" ", "")
                 )
+                if res[-1] != "}":
+                    res += "}"
+                if res[-2] != '"':
+                    res = res[:-1] + '"}'
+                print(res)
+                context_response = json.loads("{" + res)
 
                 title_category_completion = openai.ChatCompletion.create(
                     engine=deployment_name,
                     temperature=0.4,
                     messages=[
                         {"role": "system", "content": title_category_system_prompt},
-                        {"role": "user", "content": html_text},
+                        {"role": "user", "content": context_response["context"]},
                         {"role": "assistant", "content": "{"},
                     ],
                 )
+                res = title_category_completion.choices[0]["message"]["content"]
+                if res[-1] != "}":
+                    res += "}"
+                print(res)
                 title_category_response = json.loads(
                     "{" + title_category_completion.choices[0]["message"]["content"]
                 )
@@ -103,19 +124,22 @@ def main():
                             context_response["context"],
                         ]
                     ],
-                    columns=result_cols,
+                    columns=RESULT_COLS,
                 )
 
-                results = pd.concat([results, record], axis=0, ignore_index=True)
+                record.to_csv(
+                    os.path.join("results", client_name + "_output.csv"),
+                    index=False,
+                    mode="a",
+                    header=False,
+                )
                 break
 
             except Exception as e:
                 print(e)
-                time.sleep(15)
+                time.sleep(10)
                 retry_count += 1
                 continue
-
-    results.to_csv(os.path.join("results", client_name + "_output.csv"), index=False)
 
 
 if __name__ == "__main__":
