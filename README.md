@@ -31,6 +31,6 @@ First, please fill the `.env`.
 
 ```
 $ docker-compose up
-$ docker-compose exec azure-cognitive-serch-organizer /bin/bash
+$ docker-compose exec azure-cognitive-search-organizer /bin/bash
 $ poetry run python3 src/main.py
 ```
